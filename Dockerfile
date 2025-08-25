@@ -54,16 +54,16 @@ RUN echo '#!/bin/bash' > /app/entrypoint.sh && \
     echo 'fi' >> /app/entrypoint.sh && \
     echo '# Switch to mcpo user and execute command' >> /app/entrypoint.sh && \
     echo 'if [ "$(id -u)" = "0" ]; then' >> /app/entrypoint.sh && \
-    echo '    exec su-exec mcpo "$@"' >> /app/entrypoint.sh && \
+    echo '    exec gosu mcpo "$@"' >> /app/entrypoint.sh && \
     echo 'else' >> /app/entrypoint.sh && \
     echo '    exec "$@"' >> /app/entrypoint.sh && \
     echo 'fi' >> /app/entrypoint.sh && \
     chmod +x /app/entrypoint.sh
 
-# Install su-exec for secure user switching
-RUN apt-get update && apt-get install -y --no-install-recommends su-exec && rm -rf /var/lib/apt/lists/*
+# Install gosu for secure user switching
+RUN apt-get update && apt-get install -y --no-install-recommends gosu && rm -rf /var/lib/apt/lists/*
 
-# Keep as root for entrypoint to fix permissions, then su-exec to mcpo
+# Keep as root for entrypoint to fix permissions, then gosu to mcpo
 # USER mcpo  # Commented out - entrypoint will switch to mcpo
 
 # Expose port (optional but common default)
