@@ -101,10 +101,13 @@ def create_web_interface_router(config_path: Optional[str] = None) -> APIRouter:
         .status.error { background: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; }
         .server-type-fields { margin-top: 10px; }
         .hidden { display: none; }
-        .tabs { display: flex; margin-bottom: 20px; }
-        .tab { padding: 10px 20px; background: #ecf0f1; border: 1px solid #bdc3c7; cursor: pointer; border-bottom: none; }
-        .tab.active { background: white; border-bottom: 1px solid white; margin-bottom: -1px; }
-        .tab-content { border: 1px solid #bdc3c7; padding: 20px; background: white; }
+        .main-layout { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; }
+        .preview-section { }
+        .example-box { background: #e8f4f8; border: 1px solid #bee5eb; padding: 15px; border-radius: 4px; margin-bottom: 15px; }
+        .example-title { font-weight: bold; color: #0c5460; margin-bottom: 10px; }
+        .example-code { background: #f8f9fa; border: 1px solid #ddd; padding: 10px; border-radius: 4px; font-family: monospace; font-size: 12px; white-space: pre-wrap; }
+        .form-example { font-size: 12px; color: #666; margin-top: 5px; font-style: italic; }
+        @media (max-width: 768px) { .main-layout { grid-template-columns: 1fr; } }
     </style>
 </head>
 <body>
@@ -116,27 +119,67 @@ def create_web_interface_router(config_path: Optional[str] = None) -> APIRouter:
 
         <div id="status" class="status hidden"></div>
 
-        <div class="tabs">
-            <div class="tab active" onclick="showTab('editor')">Config Editor</div>
-            <div class="tab" onclick="showTab('preview')">JSON Preview</div>
-        </div>
-
-        <div id="editor-tab" class="tab-content">
-            <div class="card">
-                <h2>MCP Servers</h2>
-                <div id="servers-container">
-                    <!-- Server configs will be loaded here -->
+        <div class="main-layout">
+            <div class="editor-section">
+                <div class="card">
+                    <h2>MCP Servers Configuration</h2>
+                    <div id="servers-container">
+                        <!-- Server configs will be loaded here -->
+                    </div>
+                    <button class="btn btn-primary" onclick="addServer()">+ Add Server</button>
+                    <button class="btn btn-success" onclick="saveConfig()">Save Configuration</button>
+                    <button class="btn btn-secondary" onclick="loadConfig()">Reload</button>
                 </div>
-                <button class="btn btn-primary" onclick="addServer()">+ Add Server</button>
-                <button class="btn btn-success" onclick="saveConfig()">Save Configuration</button>
-                <button class="btn btn-secondary" onclick="loadConfig()">Reload</button>
             </div>
-        </div>
-
-        <div id="preview-tab" class="tab-content hidden">
-            <div class="card">
-                <h2>Configuration Preview</h2>
-                <pre id="json-preview" class="json-preview"></pre>
+            
+            <div class="preview-section">
+                <div class="card">
+                    <h3>📋 Configuration Preview</h3>
+                    <pre id="json-preview" class="json-preview"></pre>
+                </div>
+                
+                <div class="card">
+                    <h3>💡 Examples</h3>
+                    
+                    <div class="example-box">
+                        <div class="example-title">🔧 Stdio Server (npm package)</div>
+                        <div class="example-code">{
+  "git-mcp": {
+    "command": "npx",
+    "args": [
+      "mcp-remote", 
+      "https://gitmcp.io/{owner}/{repo}"
+    ]
+  }
+}</div>
+                        <div class="form-example">Command: npx | Arguments: mcp-remote, https://gitmcp.io/{owner}/{repo}</div>
+                    </div>
+                    
+                    <div class="example-box">
+                        <div class="example-title">🌐 HTTP Server (Context7)</div>
+                        <div class="example-code">{
+  "context7": {
+    "type": "streamable-http",
+    "url": "https://mcp.context7.com/mcp"
+  }
+}</div>
+                        <div class="form-example">Type: streamable-http | URL: https://mcp.context7.com/mcp</div>
+                    </div>
+                    
+                    <div class="example-box">
+                        <div class="example-title">📦 Local Python Server</div>
+                        <div class="example-code">{
+  "memory": {
+    "command": "uvx",
+    "args": ["mcp-server-memory"],
+    "env": {
+      "MEMORY_DIR": "/tmp/memory"
+    }
+  }
+}</div>
+                        <div class="form-example">Command: uvx | Arguments: mcp-server-memory | Environment: {"MEMORY_DIR": "/tmp/memory"}</div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -144,16 +187,8 @@ def create_web_interface_router(config_path: Optional[str] = None) -> APIRouter:
     <script>
         let config = { mcpServers: {} };
 
-        function showTab(tabName) {
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.tab-content').forEach(tc => tc.classList.add('hidden'));
-            
-            event.target.classList.add('active');
-            document.getElementById(tabName + '-tab').classList.remove('hidden');
-            
-            if (tabName === 'preview') {
-                updatePreview();
-            }
+        function autoUpdatePreview() {
+            updatePreview();
         }
 
         function showStatus(message, type = 'success') {
@@ -176,12 +211,14 @@ def create_web_interface_router(config_path: Optional[str] = None) -> APIRouter:
                 args: []
             };
             renderServers();
+            autoUpdatePreview();
         }
 
         function removeServer(name) {
             if (confirm(`Remove server "${name}"?`)) {
                 delete config.mcpServers[name];
                 renderServers();
+                autoUpdatePreview();
             }
         }
 
@@ -200,6 +237,7 @@ def create_web_interface_router(config_path: Optional[str] = None) -> APIRouter:
             }
             
             renderServers();
+            autoUpdatePreview();
         }
 
         function renderServers() {
@@ -225,15 +263,21 @@ def create_web_interface_router(config_path: Optional[str] = None) -> APIRouter:
                         <div class="form-group">
                             <label>Command:</label>
                             <input type="text" value="${server.command || ''}" 
-                                onchange="updateServerCommand('${name}', this.value)" id="command-${name}">
+                                placeholder="npx, uvx, python, node..." 
+                                onchange="updateServerCommand('${name}', this.value); autoUpdatePreview();" id="command-${name}">
+                            <div class="form-example">Example: npx (for npm packages), uvx (for Python tools), python3 (for scripts)</div>
                         </div>
                         <div class="form-group">
                             <label>Arguments (one per line):</label>
-                            <textarea onchange="updateServerArgs('${name}', this.value)" id="args-${name}">${(server.args || []).join('\\\\n')}</textarea>
+                            <textarea placeholder="mcp-server-time&#10;--local-timezone=America/New_York" 
+                                onchange="updateServerArgs('${name}', this.value); autoUpdatePreview();" id="args-${name}">${(server.args || []).join('\\\\n')}</textarea>
+                            <div class="form-example">Example: Each argument on a new line. For "mcp-remote https://gitmcp.io/{owner}/{repo}", put "mcp-remote" on first line, "https://gitmcp.io/{owner}/{repo}" on second</div>
                         </div>
                         <div class="form-group">
                             <label>Environment (JSON format):</label>
-                            <textarea onchange="try { const val = this.value.trim(); config.mcpServers['${name}'].env = val ? JSON.parse(val) : {}; } catch(e) { showStatus('Invalid JSON for env', 'error'); }">${JSON.stringify(server.env || {}, null, 2)}</textarea>
+                            <textarea placeholder='{"API_KEY": "your-key", "DEBUG": "true"}' 
+                                onchange="try { const val = this.value.trim(); config.mcpServers['${name}'].env = val ? JSON.parse(val) : {}; autoUpdatePreview(); } catch(e) { showStatus('Invalid JSON for env', 'error'); }">${JSON.stringify(server.env || {}, null, 2)}</textarea>
+                            <div class="form-example">Optional: JSON object with environment variables. Use {"VARIABLE_NAME": "value"} format</div>
                         </div>
                     </div>
                     
@@ -241,11 +285,15 @@ def create_web_interface_router(config_path: Optional[str] = None) -> APIRouter:
                         <div class="form-group">
                             <label>URL:</label>
                             <input type="url" value="${server.url || ''}" 
-                                onchange="config.mcpServers['${name}'].url = this.value">
+                                placeholder="https://mcp.context7.com/mcp" 
+                                onchange="config.mcpServers['${name}'].url = this.value; autoUpdatePreview();">
+                            <div class="form-example">Example: https://mcp.context7.com/mcp (for Context7), http://localhost:3000/sse (local SSE server)</div>
                         </div>
                         <div class="form-group">
                             <label>Headers (JSON format):</label>
-                            <textarea onchange="try { const val = this.value.trim(); config.mcpServers['${name}'].headers = val ? JSON.parse(val) : {}; } catch(e) { showStatus('Invalid JSON for headers', 'error'); }">${JSON.stringify(server.headers || {}, null, 2)}</textarea>
+                            <textarea placeholder='{"Authorization": "Bearer token", "X-API-Key": "your-key"}' 
+                                onchange="try { const val = this.value.trim(); config.mcpServers['${name}'].headers = val ? JSON.parse(val) : {}; autoUpdatePreview(); } catch(e) { showStatus('Invalid JSON for headers', 'error'); }">${JSON.stringify(server.headers || {}, null, 2)}</textarea>
+                            <div class="form-example">Optional: JSON object with HTTP headers for authentication or custom headers</div>
                         </div>
                     </div>
                 `;
@@ -273,6 +321,7 @@ def create_web_interface_router(config_path: Optional[str] = None) -> APIRouter:
                 const response = await fetch('/webui/config');
                 config = await response.json();
                 renderServers();
+                autoUpdatePreview();
                 showStatus('Configuration loaded');
             } catch (error) {
                 showStatus('Failed to load configuration: ' + error.message, 'error');
@@ -292,7 +341,7 @@ def create_web_interface_router(config_path: Optional[str] = None) -> APIRouter:
                 if (response.ok) {
                     showStatus('Configuration saved successfully');
                     // Refresh the preview to show the saved state
-                    updatePreview();
+                    autoUpdatePreview();
                 } else {
                     const error = await response.text();
                     showStatus('Failed to save: ' + error, 'error');
@@ -302,8 +351,13 @@ def create_web_interface_router(config_path: Optional[str] = None) -> APIRouter:
             }
         }
 
-        // Load initial configuration
+        // Load initial configuration and update preview
         loadConfig();
+        
+        // Update preview initially even if no config
+        setTimeout(() => {
+            autoUpdatePreview();
+        }, 100);
     </script>
 </body>
 </html>
