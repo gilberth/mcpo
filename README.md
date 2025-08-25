@@ -64,6 +64,86 @@ You can also run mcpo via Docker with no installation:
 docker run -p 8000:8000 ghcr.io/open-webui/mcpo:main --api-key "top-secret" -- your_mcp_server_command
 ```
 
+## 🐳 Docker Deployment Examples
+
+### Using Docker Run with Config File
+
+Run MCPO with a configuration file and access the WebUI for easy management:
+
+```bash
+# Create a config directory
+mkdir -p config
+
+# Run with config file and WebUI access
+docker run -d --name mcpo-webui \
+  -p 8000:8000 \
+  -v $(pwd)/config:/app/config \
+  --user root \
+  ghcr.io/gilberth/mcpo:latest \
+  --config /app/config/config.json \
+  --host 0.0.0.0 \
+  --port 8000 \
+  --hot-reload
+
+# Access the WebUI at: http://localhost:8000/webui
+# Access the API docs at: http://localhost:8000/docs
+```
+
+### Using Docker Compose (Recommended)
+
+Create a `docker-compose.yml` file:
+
+```yaml
+version: '3.8'
+
+services:
+  mcpo-webui:
+    image: ghcr.io/gilberth/mcpo:latest
+    container_name: mcpo-webui
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./config:/app/config
+      - ./config.json:/app/config.json
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: >
+      --config /app/config.json
+      --host 0.0.0.0
+      --port 8000
+      --hot-reload
+    restart: unless-stopped
+    user: root
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/webui"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+```
+
+Then run:
+
+```bash
+# Start the services
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop the services
+docker-compose down
+```
+
+### Available Docker Images
+
+The repository automatically builds multi-platform Docker images:
+
+- **Latest stable**: `ghcr.io/gilberth/mcpo:latest`
+- **Development**: `ghcr.io/gilberth/mcpo:main`  
+- **Specific version**: `ghcr.io/gilberth/mcpo:v1.0.0`
+
+**Supported architectures**: linux/amd64, linux/arm64
+
 Example:
 
 ```bash
@@ -149,16 +229,7 @@ When MCPO is running with a config file, access the web interface at:
 
 ### Docker Usage with Web Interface
 
-```bash
-# Using docker-compose (recommended)
-docker-compose up
-
-# Or with docker run, mounting a config directory
-docker run -p 8000:8000 -v $(pwd)/config:/app/config \
-  mcpo --config /app/config/config.json --hot-reload --host 0.0.0.0
-
-# Access the web interface at http://localhost:8000/webui
-```
+The web interface is fully integrated and automatically available when running MCPO with Docker. See the [Docker Deployment Examples](#-docker-deployment-examples) section above for complete setup instructions.
 
 The web interface automatically saves configurations to the mounted config directory, making it persistent across container restarts.
 
