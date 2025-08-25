@@ -74,11 +74,10 @@ Run MCPO with a configuration file and access the WebUI for easy management:
 # Create a config directory
 mkdir -p config
 
-# Run with config file and WebUI access
+# Run with config file and WebUI access (permissions handled automatically)
 docker run -d --name mcpo-webui \
   -p 8000:8000 \
   -v $(pwd)/config:/app/config \
-  --user root \
   ghcr.io/gilberth/mcpo:latest \
   --config /app/config/config.json \
   --host 0.0.0.0 \
@@ -88,6 +87,8 @@ docker run -d --name mcpo-webui \
 # Access the WebUI at: http://localhost:8000/webui
 # Access the API docs at: http://localhost:8000/docs
 ```
+
+> **Note**: The Docker image automatically handles file permissions for mounted config files - no manual `chown` required!
 
 ### Using Docker Compose (Recommended)
 
@@ -113,7 +114,6 @@ services:
       --port 8000
       --hot-reload
     restart: unless-stopped
-    user: root
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/webui"]
       interval: 30s
