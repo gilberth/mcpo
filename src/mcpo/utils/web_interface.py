@@ -225,11 +225,11 @@ def create_web_interface_router(config_path: Optional[str] = None) -> APIRouter:
                         <div class="form-group">
                             <label>Command:</label>
                             <input type="text" value="${server.command || ''}" 
-                                onchange="config.mcpServers['${name}'].command = this.value">
+                                onchange="updateServerCommand('${name}', this.value)" id="command-${name}">
                         </div>
                         <div class="form-group">
                             <label>Arguments (one per line):</label>
-                            <textarea onchange="config.mcpServers['${name}'].args = this.value.split('\\n').filter(a => a.trim())">${(server.args || []).join('\\n')}</textarea>
+                            <textarea onchange="updateServerArgs('${name}', this.value)" id="args-${name}">${(server.args || []).join('\\n')}</textarea>
                         </div>
                         <div class="form-group">
                             <label>Environment (JSON format):</label>
@@ -253,6 +253,17 @@ def create_web_interface_router(config_path: Optional[str] = None) -> APIRouter:
             });
         }
 
+        function updateServerCommand(serverName, command) {
+            config.mcpServers[serverName].command = command;
+            console.log(`Updated command for ${serverName}:`, command);
+        }
+
+        function updateServerArgs(serverName, argsText) {
+            const args = argsText.split('\\n').filter(a => a.trim());
+            config.mcpServers[serverName].args = args;
+            console.log(`Updated args for ${serverName}:`, args);
+        }
+
         function updatePreview() {
             document.getElementById('json-preview').textContent = JSON.stringify(config, null, 2);
         }
@@ -270,6 +281,8 @@ def create_web_interface_router(config_path: Optional[str] = None) -> APIRouter:
 
         async function saveConfig() {
             try {
+                console.log('Saving config:', JSON.stringify(config, null, 2));
+                
                 const response = await fetch('/webui/config', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -278,6 +291,8 @@ def create_web_interface_router(config_path: Optional[str] = None) -> APIRouter:
                 
                 if (response.ok) {
                     showStatus('Configuration saved successfully');
+                    // Refresh the preview to show the saved state
+                    updatePreview();
                 } else {
                     const error = await response.text();
                     showStatus('Failed to save: ' + error, 'error');
