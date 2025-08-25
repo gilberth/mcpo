@@ -70,7 +70,9 @@ Example:
 uvx mcpo --port 8000 --api-key "top-secret" -- uvx mcp-server-time --local-timezone=America/New_York
 ```
 
-That’s it. Your MCP tool is now available at http://localhost:8000 with a generated OpenAPI schema — test it live at [http://localhost:8000/docs](http://localhost:8000/docs).
+That's it. Your MCP tool is now available at http://localhost:8000 with a generated OpenAPI schema — test it live at [http://localhost:8000/docs](http://localhost:8000/docs).
+
+🌐 **Web Configuration Interface**: Access the built-in configuration manager at [http://localhost:8000/webui](http://localhost:8000/webui) to manage your MCP servers through a user-friendly web interface.
 
 🤝 **To integrate with Open WebUI after launching the server, check our [docs](https://docs.openwebui.com/openapi-servers/open-webui/).**
 
@@ -126,6 +128,39 @@ Each tool will be accessible under its own unique route, e.g.:
 - http://localhost:8000/time
 
 Each with a dedicated OpenAPI schema and proxy handler. Access full schema UI at: `http://localhost:8000/<tool>/docs`  (e.g. /memory/docs, /time/docs)
+
+## 🌐 Web Configuration Interface
+
+MCPO includes a built-in web interface for managing your MCP server configurations. This is particularly useful when running in Docker containers or when you want to modify configurations without editing files manually.
+
+### Accessing the Web Interface
+
+When MCPO is running with a config file, access the web interface at:
+- **Local**: http://localhost:8000/webui
+- **Docker**: http://localhost:8000/webui (or your configured port)
+
+### Features
+
+- ✅ **Visual Configuration Editor**: Add, edit, and remove MCP servers through a user-friendly interface
+- ✅ **Real-time Validation**: Config validation with immediate feedback
+- ✅ **JSON Preview**: See the raw configuration before saving
+- ✅ **Support for All Server Types**: stdio, SSE, and Streamable HTTP servers
+- ✅ **Hot Reload Compatible**: Changes take effect immediately when hot-reload is enabled
+
+### Docker Usage with Web Interface
+
+```bash
+# Using docker-compose (recommended)
+docker-compose up
+
+# Or with docker run, mounting a config directory
+docker run -p 8000:8000 -v $(pwd)/config:/app/config \
+  mcpo --config /app/config/config.json --hot-reload --host 0.0.0.0
+
+# Access the web interface at http://localhost:8000/webui
+```
+
+The web interface automatically saves configurations to the mounted config directory, making it persistent across container restarts.
 
 ## 🔧 Requirements
 

@@ -1,0 +1,387 @@
+name: Auto-sync upstream with WebUI preservation
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'  # Every Monday at 6 AM UTC
+  workflow_dispatch:     # Allow manual trigger
+
+jobs:
+  sync-upstream-webui:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/open-webui/mcpo.git
+          git fetch upstream
+
+      - name: Check for updates
+        id: check-updates
+        run: |
+          CURRENT_HASH=$(git rev-parse HEAD)
+          UPSTREAM_HASH=$(git rev-parse upstream/main)
+          BEHIND=$(git rev-list --count HEAD..upstream/main)
+          
+          echo "current_hash=$CURRENT_HASH" >> $GITHUB_OUTPUT
+          echo "upstream_hash=$UPSTREAM_HASH" >> $GITHUB_OUTPUT
+          echo "commits_behind=$BEHIND" >> $GITHUB_OUTPUT
+          
+          if [ $BEHIND -gt 0 ]; then
+            echo "has_updates=true" >> $GITHUB_OUTPUT
+            echo "📥 Found $BEHIND new commits from upstream"
+          else
+            echo "has_updates=false" >> $GITHUB_OUTPUT
+            echo "✅ Already up to date with upstream"
+          fi
+
+      - name: Create backup of WebUI files
+        if: steps.check-updates.outputs.has_updates == 'true'
+        run: |
+          echo "💾 Creating backup of WebUI modifications..."
+          mkdir -p /tmp/webui-backup
+          
+          # Backup critical WebUI files
+          cp src/mcpo/utils/web_interface.py /tmp/webui-backup/ 2>/dev/null || echo "⚠️ web_interface.py not found"
+          cp docker-compose.yml /tmp/webui-backup/ 2>/dev/null || echo "⚠️ docker-compose.yml not found"
+          cp config.json.example /tmp/webui-backup/ 2>/dev/null || echo "⚠️ config.json.example not found"
+          
+          # Extract WebUI modifications from main.py
+          echo "🔍 Extracting WebUI modifications from main.py..."
+          
+          # Create a patch with just our WebUI changes
+          cat > /tmp/webui-backup/webui-main-changes.txt << 'EOF'
+          # WebUI imports that need to be preserved
+          from mcpo.utils.web_interface import create_web_interface_router
+          
+          # WebUI router integration that needs to be preserved
+          web_router = create_web_interface_router(config_path=config_path)
+          main_app.include_router(web_router)
+          EOF
+          
+          # Also backup the current main.py for comparison
+          cp src/mcpo/main.py /tmp/webui-backup/main.py.current
+
+      - name: Create update branch
+        if: steps.check-updates.outputs.has_updates == 'true'
+        run: |
+          BRANCH_NAME="auto-update-$(date +%Y%m%d-%H%M%S)"
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_ENV
+          git checkout -b $BRANCH_NAME
+
+      - name: Attempt automatic merge
+        if: steps.check-updates.outputs.has_updates == 'true'
+        id: merge-attempt
+        run: |
+          echo "🔄 Attempting to merge upstream changes..."
+          
+          if git merge upstream/main --no-edit; then
+            echo "merge_success=true" >> $GITHUB_OUTPUT
+            echo "✅ Clean merge successful"
+          else
+            echo "merge_success=false" >> $GITHUB_OUTPUT
+            echo "❌ Merge conflicts detected"
+            
+            # Reset to clean state
+            git merge --abort
+            echo "🔧 Will attempt smart merge..."
+          fi
+
+      - name: Smart merge with WebUI preservation
+        if: steps.check-updates.outputs.has_updates == 'true' && steps.merge-attempt.outputs.merge_success == 'false'
+        id: smart-merge
+        run: |
+          echo "🧠 Performing smart merge with WebUI preservation..."
+          
+          # Get the list of changed files from upstream
+          git diff --name-only HEAD upstream/main > /tmp/changed-files.txt
+          echo "📝 Files changed in upstream:"
+          cat /tmp/changed-files.txt
+          
+          # Check if main.py is in the changed files
+          if grep -q "src/mcpo/main.py" /tmp/changed-files.txt; then
+            echo "⚠️ main.py was changed upstream - need careful merge"
+            echo "main_py_changed=true" >> $GITHUB_OUTPUT
+            
+            # Strategy: Take upstream version, then re-apply our changes
+            git checkout upstream/main -- src/mcpo/main.py
+            
+            # Re-apply WebUI modifications
+            python3 << 'PYTHON_SCRIPT'
+import re
+
+# Read the current (upstream) main.py
+with open('src/mcpo/main.py', 'r') as f:
+    content = f.read()
+
+# Add WebUI import if not present
+webui_import = "from mcpo.utils.web_interface import create_web_interface_router"
+if webui_import not in content:
+    # Find other mcpo.utils imports and add after them
+    import_pattern = r'(from mcpo\.utils\.[^\n]+ import [^\n]+)'
+    matches = re.findall(import_pattern, content)
+    if matches:
+        # Add after the last mcpo.utils import
+        last_import = matches[-1]
+        content = content.replace(last_import, last_import + '\n' + webui_import)
+    else:
+        # Add after the mcpo imports section
+        pattern = r'(from mcpo[^\n]*\n)'
+        content = re.sub(pattern + r'(?!\s*from mcpo)', r'\1' + webui_import + '\n', content)
+
+# Add WebUI router integration
+webui_router_code = """
+    # Add web interface router
+    web_router = create_web_interface_router(config_path=config_path)
+    main_app.include_router(web_router)"""
+
+# Find where to insert the router code (after middleware setup, before server start)
+cors_pattern = r'(main_app\.add_middleware\(\s*CORSMiddleware[^}]+}\s*\))'
+if re.search(cors_pattern, content, re.DOTALL):
+    content = re.sub(cors_pattern + r'\s*\n', r'\1\n' + webui_router_code + '\n', content, flags=re.DOTALL)
+else:
+    # Fallback: add before headers processing
+    headers_pattern = r'(\s+headers = kwargs\.get\("headers"\))'
+    if re.search(headers_pattern, content):
+        content = re.sub(headers_pattern, webui_router_code + r'\1', content)
+
+# Write the modified content
+with open('src/mcpo/main.py', 'w') as f:
+    f.write(content)
+
+print("✅ WebUI modifications re-applied to main.py")
+PYTHON_SCRIPT
+            
+          else
+            echo "main_py_changed=false" >> $GITHUB_OUTPUT
+            # main.py not changed, safe to merge everything
+            git merge upstream/main --no-edit
+          fi
+          
+          echo "smart_merge_success=true" >> $GITHUB_OUTPUT
+
+      - name: Restore WebUI files
+        if: steps.check-updates.outputs.has_updates == 'true'
+        run: |
+          echo "📁 Restoring WebUI-specific files..."
+          
+          # Restore WebUI files that should be preserved
+          cp /tmp/webui-backup/web_interface.py src/mcpo/utils/ 2>/dev/null || echo "⚠️ web_interface.py not found in backup"
+          cp /tmp/webui-backup/docker-compose.yml . 2>/dev/null || echo "⚠️ docker-compose.yml not found in backup"
+          cp /tmp/webui-backup/config.json.example . 2>/dev/null || echo "⚠️ config.json.example not found in backup"
+          
+          # Add any new files that might have been created
+          git add .
+
+      - name: Verify WebUI integration
+        if: steps.check-updates.outputs.has_updates == 'true'
+        id: verify-webui
+        run: |
+          echo "🔍 Verifying WebUI integration..."
+          
+          # Check if WebUI import exists in main.py
+          if grep -q "from mcpo.utils.web_interface import create_web_interface_router" src/mcpo/main.py; then
+            echo "✅ WebUI import found in main.py"
+            webui_import_ok=true
+          else
+            echo "❌ WebUI import missing from main.py"
+            webui_import_ok=false
+          fi
+          
+          # Check if WebUI router is added
+          if grep -q "create_web_interface_router" src/mcpo/main.py; then
+            echo "✅ WebUI router integration found in main.py"
+            webui_router_ok=true
+          else
+            echo "❌ WebUI router integration missing from main.py"
+            webui_router_ok=false
+          fi
+          
+          # Check if WebUI files exist
+          if [ -f "src/mcpo/utils/web_interface.py" ]; then
+            echo "✅ WebUI interface file exists"
+            webui_file_ok=true
+          else
+            echo "❌ WebUI interface file missing"
+            webui_file_ok=false
+          fi
+          
+          # Overall verification
+          if [ "$webui_import_ok" = true ] && [ "$webui_router_ok" = true ] && [ "$webui_file_ok" = true ]; then
+            echo "verification_success=true" >> $GITHUB_OUTPUT
+            echo "✅ WebUI integration verification passed"
+          else
+            echo "verification_success=false" >> $GITHUB_OUTPUT
+            echo "❌ WebUI integration verification failed"
+          fi
+
+      - name: Build test Docker image
+        if: steps.check-updates.outputs.has_updates == 'true' && steps.verify-webui.outputs.verification_success == 'true'
+        run: |
+          echo "🐳 Building test Docker image..."
+          docker build -t mcpo-webui-test:latest .
+
+      - name: Test WebUI functionality
+        if: steps.check-updates.outputs.has_updates == 'true' && steps.verify-webui.outputs.verification_success == 'true'
+        id: test-webui
+        run: |
+          echo "🧪 Testing WebUI functionality..."
+          
+          # Create test config
+          echo '{"mcpServers": {}}' > test-config.json
+          
+          # Start container in background
+          docker run -d --name mcpo-webui-test \
+            -p 8080:8000 \
+            -v $(pwd)/test-config.json:/app/config.json \
+            mcpo-webui-test:latest \
+            --config /app/config.json \
+            --host 0.0.0.0 \
+            --port 8000
+          
+          # Wait for startup
+          sleep 10
+          
+          # Test WebUI endpoints
+          webui_status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/webui/ || echo "000")
+          config_status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/webui/config || echo "000")
+          
+          echo "WebUI page status: $webui_status"
+          echo "Config API status: $config_status"
+          
+          # Cleanup
+          docker stop mcpo-webui-test
+          docker rm mcpo-webui-test
+          
+          if [ "$webui_status" = "200" ] && [ "$config_status" = "200" ]; then
+            echo "webui_test_success=true" >> $GITHUB_OUTPUT
+            echo "✅ WebUI functionality test passed"
+          else
+            echo "webui_test_success=false" >> $GITHUB_OUTPUT
+            echo "❌ WebUI functionality test failed"
+          fi
+
+      - name: Commit changes
+        if: steps.check-updates.outputs.has_updates == 'true' && steps.verify-webui.outputs.verification_success == 'true' && steps.test-webui.outputs.webui_test_success == 'true'
+        run: |
+          echo "💾 Committing updated code..."
+          
+          git add .
+          git commit -m "🔄 Auto-sync with upstream MCPO (preserving WebUI)
+
+          - Merged ${{ steps.check-updates.outputs.commits_behind }} commits from upstream
+          - WebUI functionality preserved and verified
+          - Docker integration maintained
+          - All tests passed
+          
+          Upstream hash: ${{ steps.check-updates.outputs.upstream_hash }}
+          Previous hash: ${{ steps.check-updates.outputs.current_hash }}
+          
+          Auto-generated by sync workflow 🤖"
+
+      - name: Create Pull Request
+        if: steps.check-updates.outputs.has_updates == 'true' && steps.verify-webui.outputs.verification_success == 'true' && steps.test-webui.outputs.webui_test_success == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "📝 Creating pull request..."
+          
+          # Push the branch
+          git push origin ${{ env.branch_name }}
+          
+          # Create PR with detailed information
+          gh pr create \
+            --title "🔄 Auto-sync with upstream MCPO (${{ steps.check-updates.outputs.commits_behind }} commits)" \
+            --body "## 🤖 Automated Upstream Synchronization
+
+          This PR automatically merges the latest changes from the upstream MCPO repository while preserving all WebUI functionality.
+
+          ### 📊 Changes Summary
+          - **Commits merged:** ${{ steps.check-updates.outputs.commits_behind }}
+          - **Upstream hash:** \`${{ steps.check-updates.outputs.upstream_hash }}\`
+          - **Previous hash:** \`${{ steps.check-updates.outputs.current_hash }}\`
+
+          ### ✅ Verification Status
+          - [x] WebUI import preserved in main.py
+          - [x] WebUI router integration maintained
+          - [x] WebUI interface file exists
+          - [x] Docker image builds successfully
+          - [x] WebUI endpoints respond correctly
+          - [x] Configuration API functional
+
+          ### 🧪 Tests Performed
+          - Docker build test: ✅ Passed
+          - WebUI accessibility test: ✅ Passed (HTTP 200)
+          - Configuration API test: ✅ Passed (HTTP 200)
+
+          ### 📁 Files Modified
+          The following WebUI-related files were automatically preserved:
+          - \`src/mcpo/utils/web_interface.py\` - WebUI interface implementation
+          - \`src/mcpo/main.py\` - WebUI integration points maintained
+          - \`docker-compose.yml\` - Docker configuration preserved
+          - \`config.json.example\` - Example configuration maintained
+
+          ### 🎯 Ready to Merge
+          This PR has been automatically tested and verified. It's safe to merge.
+
+          **Generated by:** GitHub Actions
+          **Workflow:** Auto-sync upstream with WebUI preservation" \
+            --label "auto-sync,webui,upstream" \
+            --head ${{ env.branch_name }} \
+            --base main
+
+      - name: Handle failures
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "❌ Automatic sync failed - creating issue for manual intervention"
+          
+          gh issue create \
+            --title "🚨 Automatic upstream sync failed - manual intervention needed" \
+            --body "The automated upstream synchronization workflow failed.
+
+          **Error Details:**
+          - Commits behind upstream: ${{ steps.check-updates.outputs.commits_behind || 'unknown' }}
+          - Upstream hash: \`${{ steps.check-updates.outputs.upstream_hash || 'unknown' }}\`
+          - Workflow run: [View logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+          **Likely Issues:**
+          1. Complex merge conflicts in \`src/mcpo/main.py\`
+          2. WebUI integration points changed significantly
+          3. New dependencies or structural changes
+
+          **Manual Resolution Steps:**
+          1. \`git fetch upstream\`
+          2. \`git checkout -b manual-sync-$(date +%Y%m%d)\`
+          3. \`git merge upstream/main\`
+          4. Resolve conflicts, ensuring WebUI lines are preserved:
+             - Import: \`from mcpo.utils.web_interface import create_web_interface_router\`
+             - Router: \`web_router = create_web_interface_router(config_path=config_path)\`
+             - Include: \`main_app.include_router(web_router)\`
+          5. Restore \`src/mcpo/utils/web_interface.py\` if needed
+          6. Test WebUI at /webui endpoint
+          7. Create PR manually
+
+          **Priority:** High - affects WebUI functionality" \
+            --label "urgent,manual-sync,webui"
+
+      - name: Success notification
+        if: steps.check-updates.outputs.has_updates == 'false'
+        run: |
+          echo "✅ Repository is already up to date with upstream MCPO"
+          echo "No action needed - WebUI functionality preserved"

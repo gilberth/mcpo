@@ -17,6 +17,9 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 # Confirm npm and node versions (optional debugging info)
 RUN node -v && npm -v
 
+# Create app user for security
+RUN groupadd -r mcpo && useradd -r -g mcpo mcpo
+
 # Copy your mcpo source code (assuming in src/mcpo)
 COPY . /app
 WORKDIR /app
@@ -32,11 +35,31 @@ RUN uv pip install . && rm -rf ~/.cache
 # Verify mcpo installed correctly
 RUN which mcpo
 
+# Create config directory with proper permissions
+RUN mkdir -p /app/config && \
+    chown -R mcpo:mcpo /app && \
+    chmod 755 /app/config && \
+    chmod 664 /app/config.json 2>/dev/null || true
+
+# Create entrypoint script to handle permissions
+RUN echo '#!/bin/bash' > /app/entrypoint.sh && \
+    echo 'if [ -f /app/config.json ]; then' >> /app/entrypoint.sh && \
+    echo '    chmod 664 /app/config.json 2>/dev/null || true' >> /app/entrypoint.sh && \
+    echo 'fi' >> /app/entrypoint.sh && \
+    echo 'if [ -d /app/config ]; then' >> /app/entrypoint.sh && \
+    echo '    chown -R mcpo:mcpo /app/config 2>/dev/null || true' >> /app/entrypoint.sh && \
+    echo 'fi' >> /app/entrypoint.sh && \
+    echo 'exec "$@"' >> /app/entrypoint.sh && \
+    chmod +x /app/entrypoint.sh
+
+# Switch to non-root user
+USER mcpo
+
 # Expose port (optional but common default)
 EXPOSE 8000
 
 # Entrypoint set for easy container invocation
-ENTRYPOINT ["mcpo"]
+ENTRYPOINT ["/app/entrypoint.sh", "mcpo"]
 
 # Default help CMD (can override at runtime)
 CMD ["--help"]

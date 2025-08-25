@@ -27,6 +27,7 @@ from mcpo.utils.main import (
 from mcpo.utils.main import get_model_fields, get_tool_handler
 from mcpo.utils.auth import get_verify_api_key, APIKeyMiddleware
 from mcpo.utils.config_watcher import ConfigWatcher
+from mcpo.utils.web_interface import create_web_interface_router
 
 
 logger = logging.getLogger(__name__)
@@ -76,10 +77,15 @@ def load_config(config_path: str) -> Dict[str, Any]:
         with open(config_path, "r") as f:
             config_data = json.load(f)
 
-        mcp_servers = config_data.get("mcpServers", {})
-        if not mcp_servers:
-            logger.error(f"No 'mcpServers' found in config file: {config_path}")
-            raise ValueError("No 'mcpServers' found in config file.")
+        mcp_servers = config_data.get("mcpServers")
+        if mcp_servers is None:
+            logger.error(f"No 'mcpServers' key found in config file: {config_path}")
+            raise ValueError("No 'mcpServers' key found in config file.")
+        
+        # Allow empty mcpServers
+        if not isinstance(mcp_servers, dict):
+            logger.error(f"'mcpServers' must be an object in config file: {config_path}")
+            raise ValueError("'mcpServers' must be an object.")
 
         # Validate each server configuration
         for server_name, server_cfg in mcp_servers.items():
@@ -122,7 +128,8 @@ def create_sub_app(server_name: str, server_cfg: Dict[str, Any], cors_allow_orig
         sub_app.state.server_type = "stdio"
         sub_app.state.command = server_cfg["command"]
         sub_app.state.args = server_cfg.get("args", [])
-        sub_app.state.env = {**os.environ, **server_cfg.get("env", {})}
+        env_cfg = server_cfg.get("env") or {}
+        sub_app.state.env = {**os.environ, **env_cfg}
 
     server_config_type = server_cfg.get("type")
     if server_config_type == "sse" and server_cfg.get("url"):
@@ -520,6 +527,10 @@ async def run(
     # Add middleware to protect also documentation and spec
     if api_key and strict_auth:
         main_app.add_middleware(APIKeyMiddleware, api_key=api_key)
+
+    # Add web interface router
+    web_router = create_web_interface_router(config_path=config_path)
+    main_app.include_router(web_router)
 
     headers = kwargs.get("headers")
     if headers and isinstance(headers, str):

@@ -1,0 +1,29 @@
+{
+  "mcpServers": {
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "env": {}
+    },
+    "time": {
+      "command": "uvx",
+      "args": ["mcp-server-time", "--local-timezone=America/New_York"],
+      "env": {}
+    },
+    "example_sse": {
+      "type": "sse",
+      "url": "http://127.0.0.1:8001/sse",
+      "headers": {
+        "Authorization": "Bearer your-token-here",
+        "X-Custom-Header": "custom-value"
+      }
+    },
+    "example_streamable_http": {
+      "type": "streamable-http",
+      "url": "http://127.0.0.1:8002/mcp",
+      "headers": {
+        "Content-Type": "application/json"
+      }
+    }
+  }
+}
