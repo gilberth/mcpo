@@ -229,7 +229,7 @@ def create_web_interface_router(config_path: Optional[str] = None) -> APIRouter:
                         </div>
                         <div class="form-group">
                             <label>Arguments (one per line):</label>
-                            <textarea onchange="updateServerArgs('${name}', this.value)" id="args-${name}">${(server.args || []).join('\\n')}</textarea>
+                            <textarea onchange="updateServerArgs('${name}', this.value)" id="args-${name}">${(server.args || []).join('\\\\n')}</textarea>
                         </div>
                         <div class="form-group">
                             <label>Environment (JSON format):</label>
@@ -255,13 +255,13 @@ def create_web_interface_router(config_path: Optional[str] = None) -> APIRouter:
 
         function updateServerCommand(serverName, command) {
             config.mcpServers[serverName].command = command;
-            console.log(`Updated command for ${serverName}:`, command);
+            console.log('Updated command for ' + serverName + ':', command);
         }
 
         function updateServerArgs(serverName, argsText) {
             const args = argsText.split('\\n').filter(a => a.trim());
             config.mcpServers[serverName].args = args;
-            console.log(`Updated args for ${serverName}:`, args);
+            console.log('Updated args for ' + serverName + ':', args);
         }
 
         function updatePreview() {
