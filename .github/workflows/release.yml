@@ -1,0 +1,211 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g., v1.0.0)'
+        required: true
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          echo "## What's Changed" > changelog.md
+          echo "" >> changelog.md
+          
+          # Get commits since last tag
+          LAST_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$LAST_TAG" ]; then
+            echo "### 🚀 New Features" >> changelog.md
+            git log --pretty=format:"- %s" $LAST_TAG..HEAD --grep="feat\|add\|new" >> changelog.md || true
+            echo "" >> changelog.md
+            
+            echo "### 🐛 Bug Fixes" >> changelog.md  
+            git log --pretty=format:"- %s" $LAST_TAG..HEAD --grep="fix\|bug" >> changelog.md || true
+            echo "" >> changelog.md
+            
+            echo "### 🔧 Improvements" >> changelog.md
+            git log --pretty=format:"- %s" $LAST_TAG..HEAD --grep="improve\|enhance\|update" >> changelog.md || true
+            echo "" >> changelog.md
+          fi
+          
+          echo "### 🐳 Docker Image" >> changelog.md
+          echo "- **Registry**: \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}\`" >> changelog.md
+          echo "- **Platforms**: linux/amd64, linux/arm64" >> changelog.md
+          echo "- **WebUI**: Included at \`/webui\`" >> changelog.md
+          echo "" >> changelog.md
+          
+          echo "### 🚀 Quick Start" >> changelog.md
+          echo '```bash' >> changelog.md
+          echo "docker run -d --name mcpo-webui \\" >> changelog.md
+          echo "  -p 8000:8000 \\" >> changelog.md
+          echo "  -v \$(pwd)/config.json:/app/config.json \\" >> changelog.md
+          echo "  ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }} \\" >> changelog.md
+          echo "  --config /app/config.json --host 0.0.0.0 --hot-reload" >> changelog.md
+          echo '```' >> changelog.md
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          release_name: MCPO WebUI ${{ steps.tag.outputs.tag }}
+          body_path: changelog.md
+          draft: false
+          prerelease: false
+
+  build-and-release:
+    needs: create-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ needs.create-release.outputs.tag }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.create-release.outputs.tag }}
+            type=semver,pattern={{major}},value=${{ needs.create-release.outputs.tag }}
+            type=raw,value=stable
+            type=raw,value=latest
+
+      - name: Build and push release image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Test release image
+        run: |
+          echo "🧪 Testing release image..."
+          
+          # Create test config
+          echo '{"mcpServers": {"test": {"command": "echo", "args": ["Release test"]}}}' > test-config.json
+          
+          # Test the release image
+          docker run -d --name mcpo-release-test \
+            -p 8080:8000 \
+            -v $(pwd)/test-config.json:/app/config.json \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.create-release.outputs.tag }} \
+            --config /app/config.json \
+            --host 0.0.0.0 \
+            --port 8000
+          
+          sleep 10
+          
+          # Test all endpoints
+          WEBUI_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/webui/)
+          CONFIG_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/webui/config)
+          DOCS_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/docs)
+          
+          docker stop mcpo-release-test
+          docker rm mcpo-release-test
+          
+          echo "Release test results:"
+          echo "WebUI: $WEBUI_STATUS"
+          echo "Config: $CONFIG_STATUS" 
+          echo "Docs: $DOCS_STATUS"
+          
+          if [ "$WEBUI_STATUS" = "200" ] && [ "$CONFIG_STATUS" = "200" ] && [ "$DOCS_STATUS" = "200" ]; then
+            echo "✅ Release tests passed!"
+          else
+            echo "❌ Release tests failed!"
+            exit 1
+          fi
+
+      - name: Create Docker Compose file for release
+        run: |
+          cat > docker-compose.release.yml << EOF
+          version: '3.8'
+          
+          services:
+            mcpo-webui:
+              image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.create-release.outputs.tag }}
+              container_name: mcpo-webui
+              ports:
+                - "8000:8000"
+              volumes:
+                - ./config.json:/app/config.json
+                - ./config:/app/config
+              environment:
+                - PYTHONUNBUFFERED=1
+              command: >
+                --config /app/config.json
+                --host 0.0.0.0
+                --port 8000
+                --hot-reload
+              restart: unless-stopped
+              healthcheck:
+                test: ["CMD", "curl", "-f", "http://localhost:8000/webui"]
+                interval: 30s
+                timeout: 10s
+                retries: 3
+          EOF
+
+      - name: Upload Docker Compose to release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: docker-compose.release.yml
+          asset_name: docker-compose.yml
+          asset_content_type: application/x-yaml
